@@ -113,7 +113,7 @@ The application stands out for its **ease of use**, **low resource consumption**
 
 ## License
 
-The project is licensed under [insert chosen license, e.g., MIT License]. See the `LICENSE` file for details.
+The project is licensed under Work Time Tracker MIT License. See the `LICENSE` file for details.
 
 ---
 
