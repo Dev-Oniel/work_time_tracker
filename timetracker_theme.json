@@ -1,0 +1,77 @@
+{
+  "CTk": {
+    "fg_color": ["#181E29", "#181E29"], 
+    "bg_color": "#181E29"
+  },
+  "CTkFrame": {
+    "fg_color": ["#232B3B", "#232B3B"],
+    "border_color": ["#232B3B", "#232B3B"],
+    "corner_radius": 10,
+    "border_width": 0
+  },
+  "CTkLabel": {
+    "fg_color": ["#232B3B", "#232B3B"],
+    "text_color": ["#FFFFFF", "#FFFFFF"],
+    "corner_radius": 0
+  },
+  "CTkButton": {
+    "fg_color": ["#22D3EE", "#22D3EE"],
+    "text_color": ["#FFFFFF", "#FFFFFF"],
+    "text_color_disabled": ["#A1A7B3", "#A1A7B3"],
+    "hover_color": ["#06B6D4", "#06B6D4"],
+    "border_color": ["#22D3EE", "#22D3EE"],
+    "corner_radius": 12,
+    "border_width": 0
+  },
+  "CTkComboBox": {
+    "fg_color": ["#323B4C", "#323B4C"],
+    "text_color": ["#FFFFFF", "#FFFFFF"],
+    "text_color_disabled": ["#A1A7B3", "#A1A7B3"],
+    "button_color": ["#323B4C", "#323B4C"],
+    "button_hover_color": ["#323b4c", "#323b4c"],
+    "dropdown_fg_color": ["#323B4C", "#323B4C"],
+    "corner_radius": 10,
+    "border_width": 0,
+    "border_color": ["#323B4C", "#323B4C"]
+  },
+  "CTkEntry": {
+    "fg_color": ["#323B4C", "#323B4C"],
+    "text_color": ["#FFFFFF", "#FFFFFF"],
+    "placeholder_text_color": ["#A1A7B3", "#A1A7B3"],
+    "border_color": ["#323B4C", "#323B4C"],
+    "corner_radius": 10,
+    "border_width": 0
+  },
+  "CTkCheckBox": {
+    "fg_color": ["#323B4C", "#323B4C"],
+    "text_color": ["#FFFFFF", "#FFFFFF"],
+    "text_color_disabled": ["#A1A7B3", "#A1A7B3"],
+    "hover_color": ["#444b5a", "#444b5a"],
+    "border_color": ["#323B4C", "#323B4C"],
+    "border_width": 2,
+    "corner_radius": 10,
+    "checkmark_color": ["#22D3EE", "#22D3EE"]
+  },
+  "CTkScrollbar": {
+    "fg_color": ["#232B3B", "#232B3B"],
+    "button_color": ["#323B4C", "#323B4C"],
+    "button_hover_color": ["#444b5a", "#444b5a"],
+    "border_color": ["#232B3B", "#232B3B"],
+    "border_width": 0,
+    "corner_radius": 10,
+    "border_spacing": 2
+  },
+  "CTkFont": {
+    "family": "Arial",
+    "size": 13,
+    "weight": "normal"
+  },
+  "DropdownMenu": {
+    "fg_color": ["#323B4C", "#323B4C"],
+    "hover_color": ["#444b5a", "#444b5a"],
+    "text_color": ["#FFFFFF", "#FFFFFF"],
+    "border_color": ["#323B4C", "#323B4C"],
+    "border_width": 0,
+    "corner_radius": 10
+  }
+}

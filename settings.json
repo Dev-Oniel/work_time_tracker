@@ -1,0 +1,15 @@
+{
+    "shortcuts": {
+        "start": "ctrl+alt+e",
+        "stop": "ctrl+alt+d",
+        "reset": "ctrl+alt+r",
+        "compact": "ctrl+alt+c"
+    },
+    "always_on_top": true,
+    "resizable": false,
+    "idle_threshold": 10.0,
+    "check_interval": 0.5,
+    "close_to_tray": true,
+    "auto_compact_mode": true,
+    "language": "en"
+}
