@@ -12,8 +12,8 @@ import keyboard
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
-import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 import sys
 
 def resource_path(relative_path):
@@ -55,16 +55,16 @@ class TimeTrackerApp:
     def __init__(self, root):
         self.root = root
         self.language = 'en'  # Inicializa antes de load_settings
-        self.root.title("TimeTracker")
-        self.root.geometry("425x855")
-        self.root.resizable(False, False)  # Permite redimensionar: DESATIVADO por padrão
+        self.root.title("Work Time Tracker")
+        self.root.geometry("425x500") # Aumentado para dar mais espaço
+        self.root.resizable(True, True)  # Permitir redimensionar é melhor com lista dinâmica
         try:
             self.root.iconbitmap(resource_path("icone.ico"))
         except Exception as e:
             print(f"Could not load icon: {e}")
         self.root.attributes('-toolwindow', True)
         self.always_on_top = True
-        self.resizable = False  # Desativado por padrão
+        self.resizable = True  # Ativado por padrão
         self.close_to_tray = True  # Padrão: minimizar para bandeja, será usado na criação da interface
         
         # Variáveis
@@ -79,6 +79,7 @@ class TimeTrackerApp:
         self.mouse_position = pyautogui.position()
         self.timer_var = ctk.StringVar(value="00:00:00")
         self.show_full_history = False  # Controla exibição do histórico completo
+        self.app_times = {}  # Novo: tempo individual de cada app
         
         # Arquivo de configurações e atalhos
         self.settings_file = "settings.json"
@@ -122,10 +123,10 @@ class TimeTrackerApp:
 
         # Ícone
         try:
-            from PIL import Image, ImageTk
-            icon_img = Image.open(resource_path("icone.ico")).resize((25, 25))
-            self.icon_photo = ImageTk.PhotoImage(icon_img)
-            icon_label = ctk.CTkLabel(self.title_bar, image=self.icon_photo, text="", fg_color="#181e29")
+            from PIL import Image
+            icon_pil_image = Image.open(resource_path("icone.ico"))
+            self.icon_ctk_image = ctk.CTkImage(light_image=icon_pil_image, dark_image=icon_pil_image, size=(25, 25))
+            icon_label = ctk.CTkLabel(self.title_bar, image=self.icon_ctk_image, text="", fg_color="#181e29")
             icon_label.pack(side="left", padx=(8, 4), pady=4)
         except Exception as e:
             icon_label = ctk.CTkLabel(self.title_bar, text="", fg_color="#181e29")
@@ -179,7 +180,7 @@ class TimeTrackerApp:
         if not os.path.exists(resource_path(self.filename)):
             with open(resource_path(self.filename), mode="w", newline="", encoding="utf-8") as file:
                 writer = csv.writer(file)
-                writer.writerow(["DATE", "TIME", "APPS", "DURATION"])
+                writer.writerow(["DATE", "TIME", "APP", "DURATION"])
 
     def load_settings(self):
         """Carrega configurações de um arquivo JSON."""
@@ -189,7 +190,7 @@ class TimeTrackerApp:
                     settings = json.load(f)
                     self.shortcuts.update(settings.get("shortcuts", {}))
                     self.always_on_top = settings.get("always_on_top", True)
-                    self.resizable = settings.get("resizable", False)
+                    self.resizable = settings.get("resizable", True) # Padrão para True
                     self.idle_threshold = settings.get("idle_threshold", 10)
                     self.check_interval = settings.get("check_interval", 1.0)
                     self.close_to_tray = settings.get("close_to_tray", True)
@@ -226,22 +227,22 @@ class TimeTrackerApp:
             font=("Arial", 14), text_color="#A1A7B3", fg_color="#232B3B"
         ).pack(pady=(0, 5))
 
-        # Comboboxes
-        combo_style = {"fg_color": "#323B4C", "text_color": "#FFFFFF", "button_color": "#565b5e"}
+        # --- Seção de seleção de apps ---
+        # Wrapper frame para garantir altura fixa da área rolável
+        app_selector_wrapper = ctk.CTkFrame(self.page_main, fg_color="transparent", height=90)
+        app_selector_wrapper.pack(fill="x", expand=False, padx=0, pady=0)
+        app_selector_wrapper.pack_propagate(False) # Crucial: impede que o wrapper se redimensione para caber os filhos
+
+        self.app_selector_container = ctk.CTkScrollableFrame(app_selector_wrapper, label_text="", fg_color="transparent")
+        self.app_selector_container.pack(fill="both", expand=True) # Preenche o wrapper
+
         self.app_combos = []
-        for i in range(3):
-            combo = ctk.CTkComboBox(
-                self.page_main,
-                values=self.get_window_titles(),
-                width=340,
-                fg_color="#323B4C",
-                text_color="#FFFFFF",
-                button_color="#565b5e",
-                dropdown_fg_color="#323B4C"
-            )
-            combo.pack(pady=5)
-            combo.set(f"{t('application')} {i+1}")
-            self.app_combos.append(combo)
+        self.add_app_slot() # Adiciona o primeiro slot
+
+        # Botão para adicionar mais apps
+        add_app_button = ctk.CTkButton(self.page_main, text=t("add_app"), command=self.add_app_slot, width=130)
+        add_app_button.pack(pady=(5, 10))
+        # --- Fim da seção de seleção de apps ---
 
         # Timer
         timer_frame = ctk.CTkFrame(self.page_main, fg_color="#323b4c", corner_radius=50)
@@ -270,25 +271,25 @@ class TimeTrackerApp:
         self.compact_btn = ctk.CTkButton(btn_frame2, text=t("compact"), fg_color="#818CF8", text_color="#FFFFFF", hover_color="#323b4c", **btn_style2, command=self.toggle_compact_mode)
         self.compact_btn.grid(row=0, column=1, padx=5, pady=5)
 
-        # Seção de histórico
-        self.create_history_section()
-
         # Página 2: Configurações
+        self.page_history = ctk.CTkFrame(self.root, fg_color="#232B3B")
         self.page_settings = ctk.CTkFrame(self.root, fg_color="#232B3B")
-        ctk.CTkLabel(self.page_settings, text=t("settings"), font=("Arial", 20, "bold"), text_color="#22D3EE", fg_color="#232B3B").pack(pady=(40, 10))
+
+        # --- Frame Rolável para Configurações ---
+        settings_scroll_frame = ctk.CTkScrollableFrame(self.page_settings, fg_color="transparent", label_text="")
+        settings_scroll_frame.pack(fill="both", expand=True, padx=10, pady=(32, 0))
+
+        ctk.CTkLabel(settings_scroll_frame, text=t("settings"), font=("Arial", 20, "bold"), text_color="#22D3EE").pack(pady=(10, 10))
 
         # Combobox de idioma
         self.language_var = ctk.StringVar(value=self.language)
-        lang_frame = ctk.CTkFrame(self.page_settings, fg_color="#232B3B")
+        lang_frame = ctk.CTkFrame(settings_scroll_frame, fg_color="#232B3B")
         lang_frame.pack(pady=5, padx=20, fill="x")
         ctk.CTkLabel(lang_frame, text=t("language"), text_color="#A1A7B3").pack(side="left", padx=5)
         self.language_combo = ctk.CTkComboBox(
             lang_frame,
             values=[LANGUAGES[k] for k in LANGUAGES],
             width=160,
-            fg_color="#323B4C",
-            text_color="#FFFFFF",
-            button_color="#565b5e",
             variable=self.language_var,
             command=self.on_language_change
         )
@@ -297,7 +298,7 @@ class TimeTrackerApp:
         self.language_combo.set(LANGUAGES.get(self.language, "English"))
 
         close_to_tray_check = ctk.CTkCheckBox(
-            self.page_settings,
+            settings_scroll_frame,
             text=t("minimize_to_tray"),
             variable=self.close_to_tray_var,
             fg_color="#323B4C",
@@ -307,8 +308,8 @@ class TimeTrackerApp:
         
         # Novo: Checkbox para modo compacto automático
         auto_compact_check = ctk.CTkCheckBox(
-            self.page_settings,
-            text="Automatically enter compact mode when tracking starts",
+            settings_scroll_frame,
+            text=t("auto_compact"),
             variable=self.auto_compact_mode_var,
             fg_color="#323B4C",
             text_color="#A1A7B3"
@@ -318,8 +319,8 @@ class TimeTrackerApp:
         # Always On Top
         always_on_top_var = ctk.BooleanVar(value=self.always_on_top)
         always_on_top_check = ctk.CTkCheckBox(
-            self.page_settings,
-            text="Always On Top",
+            settings_scroll_frame,
+            text=t("always_on_top"),
             variable=always_on_top_var,
             command=lambda: self.toggle_always_on_top(always_on_top_var.get()),
             fg_color="#323B4C", text_color="#A1A7B3"
@@ -329,8 +330,8 @@ class TimeTrackerApp:
         # Resizable
         resizable_var = ctk.BooleanVar(value=self.resizable)
         resizable_check = ctk.CTkCheckBox(
-            self.page_settings,
-            text="Allow Resizing",
+            settings_scroll_frame,
+            text=t("allow_resizing"),
             variable=resizable_var,
             command=lambda: self.toggle_resizable(resizable_var.get()),
             fg_color="#323B4C", text_color="#A1A7B3"
@@ -338,22 +339,22 @@ class TimeTrackerApp:
         resizable_check.pack(pady=10, padx=20, anchor="w")
 
         # Idle Threshold
-        idle_frame = ctk.CTkFrame(self.page_settings, fg_color="#232B3B")
+        idle_frame = ctk.CTkFrame(settings_scroll_frame, fg_color="#232B3B")
         idle_frame.pack(pady=10, padx=20, fill="x")
-        ctk.CTkLabel(idle_frame, text="Idle Threshold (seconds):", text_color="#A1A7B3").pack(side="left", padx=5)
+        ctk.CTkLabel(idle_frame, text=t("idle_threshold"), text_color="#A1A7B3").pack(side="left", padx=5)
         ctk.CTkEntry(idle_frame, textvariable=self.idle_threshold_var, width=100, fg_color="#323B4C", text_color="#FFFFFF").pack(side="left", padx=5)
 
         # Check Interval
-        interval_frame = ctk.CTkFrame(self.page_settings, fg_color="#232B3B")
+        interval_frame = ctk.CTkFrame(settings_scroll_frame, fg_color="#232B3B")
         interval_frame.pack(pady=10, padx=20, fill="x")
-        ctk.CTkLabel(interval_frame, text="Check Interval (seconds):", text_color="#A1A7B3").pack(side="left", padx=5)
+        ctk.CTkLabel(interval_frame, text=t("check_interval"), text_color="#A1A7B3").pack(side="left", padx=5)
         ctk.CTkEntry(interval_frame, textvariable=self.check_interval_var, width=100, fg_color="#323B4C", text_color="#FFFFFF").pack(side="left", padx=5)
 
         # Atalhos
-        shortcuts_frame = ctk.CTkFrame(self.page_settings, fg_color="#232B3B")
+        shortcuts_frame = ctk.CTkFrame(settings_scroll_frame, fg_color="#232B3B")
         shortcuts_frame.pack(pady=10, padx=20, fill="x")
-        ctk.CTkLabel(shortcuts_frame, text="Customize Keyboard Shortcuts", font=("Arial", 14, "bold"), text_color="#22D3EE").grid(row=0, column=0, columnspan=2, pady=(5, 10))
-        shortcut_labels = ["Start Timer", "Stop Timer", "Reset Timer", "Toggle Compact"]
+        ctk.CTkLabel(shortcuts_frame, text=t("customize_shortcuts"), font=("Arial", 14, "bold"), text_color="#22D3EE").grid(row=0, column=0, columnspan=2, pady=(5, 10))
+        shortcut_labels = [t("start_timer"), t("stop_timer"), t("reset_timer"), t("toggle_compact")]
         shortcut_vars = [self.start_shortcut_var, self.stop_shortcut_var, self.reset_shortcut_var, self.compact_shortcut_var]
         for i, label_text in enumerate(shortcut_labels):
             ctk.CTkLabel(shortcuts_frame, text=f"{label_text}:", text_color="#A1A7B3").grid(row=i+1, column=0, padx=10, pady=5, sticky="w")
@@ -362,17 +363,19 @@ class TimeTrackerApp:
         shortcuts_frame.grid_columnconfigure(1, weight=1)
 
         # Botões de ação da página de configurações
-        settings_btn_frame = ctk.CTkFrame(self.page_settings, fg_color="#232B3B")
+        settings_btn_frame = ctk.CTkFrame(settings_scroll_frame, fg_color="#232B3B")
         settings_btn_frame.pack(pady=20, padx=20, fill="x")
-        ctk.CTkButton(settings_btn_frame, text="Save Settings", fg_color="#22D3EE", text_color="#181E29", hover_color="#06B6D4", command=self.save_settings).pack(side="right", padx=5)
-        ctk.CTkButton(settings_btn_frame, text="Back", fg_color="#6B7280", text_color="#FFFFFF", hover_color="#374151", command=self.show_main_page).pack(side="right", padx=5)
+        ctk.CTkButton(settings_btn_frame, text=t("save_settings"), fg_color="#22D3EE", text_color="#181E29", hover_color="#06B6D4", command=self.save_settings).pack(side="right", padx=5)
+        ctk.CTkButton(settings_btn_frame, text=t("back"), fg_color="#6B7280", text_color="#FFFFFF", hover_color="#374151", command=self.show_main_page).pack(side="right", padx=5)
 
         # Dicas para o usuário (Settings)
-        tips_frame = ctk.CTkFrame(self.page_settings, fg_color="#232B3B")
+        tips_frame = ctk.CTkFrame(settings_scroll_frame, fg_color="#232B3B")
         tips_frame.pack(pady=(0, 10), padx=20, fill="x")
         ctk.CTkLabel(tips_frame, text=t("tip_title"), font=("Arial", 13, "bold"), text_color="#22D3EE").pack(anchor="w", pady=(0, 2))
         ctk.CTkLabel(tips_frame, text=t("tip_select_before"), font=("Arial", 11), text_color="#A1A7B3", wraplength=380, justify="left").pack(anchor="w", pady=(0, 2))
         ctk.CTkLabel(tips_frame, text=t("tip_blank_for_all"), font=("Arial", 11), text_color="#A1A7B3", wraplength=380, justify="left").pack(anchor="w")
+
+        self.create_history_section(self.page_history)
 
         # Página 3: Estatísticas
         self.page_stats = ctk.CTkFrame(self.root, fg_color="#232B3B")
@@ -392,26 +395,63 @@ class TimeTrackerApp:
                      hover_color="#34495E", border_width=0, border_color="#7F8C8D",
                      text_color="#7F8C8D", command=self.show_settings_page, width=nav_btn_width).pack(side="left", expand=True, padx=5)
 
-    def create_history_section(self):
-        history_frame = ctk.CTkFrame(self.page_main, corner_radius=10, fg_color="#232B3B")
-        history_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        
-        ctk.CTkLabel(history_frame, text=t("usage_history"), text_color="#22D3EE", font=("Arial", 28, "bold")).pack(pady=(10, 5))
-        
-        # Filtros
-        filter_frame = ctk.CTkFrame(history_frame, fg_color="#232B3B",)
-        filter_frame.pack(fill="x", padx=5, pady=5)
-        
+    def create_history_section(self, parent_frame):
+        history_frame = ctk.CTkFrame(parent_frame, corner_radius=10, fg_color="#232B3B")
+        history_frame.pack(fill="both", expand=True, padx=10, pady=(32, 10))
+
+        # --- Relatórios de uso diário, semanal e mensal + Filtros lado a lado ---
+        top_frame = ctk.CTkFrame(history_frame, fg_color="#232b3b")
+        top_frame.pack(fill="x", padx=5, pady=(10, 0))
+        # Relatórios (lado esquerdo)
+        self.usage_report_frame = ctk.CTkFrame(top_frame, fg_color="#232b3b")
+        self.usage_report_frame.pack(side="left", fill="x", expand=True)
+        self.usage_report_labels = []
+        for _ in range(3):
+            frame = ctk.CTkFrame(self.usage_report_frame, fg_color="#232b3b")
+            frame.pack(fill="x", anchor="w")
+            text_lbl = ctk.CTkLabel(frame, text="", font=("Arial", 10), text_color="#6b7280", anchor="w")
+            text_lbl.pack(side="left")
+            time_lbl = ctk.CTkLabel(frame, text="", font=("Arial", 10, "bold"), text_color="#22D3EE", anchor="w")
+            time_lbl.pack(side="left", padx=(5,0))
+            self.usage_report_labels.append((text_lbl, time_lbl))
+        # Filtros (lado direito, campos alinhados na horizontal)
+        filter_frame = ctk.CTkFrame(top_frame, fg_color="#232b3b")
+        filter_frame.pack(side="right", padx=(10,0), pady=0)
         self.show_full_var = ctk.BooleanVar(value=self.show_full_history)
         ctk.CTkCheckBox(filter_frame, text=t("show_full_history"), variable=self.show_full_var,
-                        command=self.toggle_history_display).pack(side="left", padx=5)
-        
-        ctk.CTkLabel(filter_frame, text=t("filter_by_date")).pack(side="left", padx=5)
+                        command=self.toggle_history_display).pack(anchor="w", pady=2)
+        # Linha: Filter by date | [campo] | [apply]
+        date_row = ctk.CTkFrame(filter_frame, fg_color="#232b3b")
+        date_row.pack(anchor="w", pady=2)
+        ctk.CTkLabel(date_row, text=t("Date:")).pack(side="left", padx=(0,2))
         self.date_filter_var = ctk.StringVar()
-        self.date_filter_entry = ctk.CTkEntry(filter_frame, width=60,textvariable=self.date_filter_var)
-        self.date_filter_entry.pack(side="left", padx=0)
-        ctk.CTkButton(filter_frame, text=t("apply"), command=self.apply_date_filter, width=60).pack(side="left", padx=5)
-        
+        self.date_filter_entry = ctk.CTkEntry(date_row, width=100, textvariable=self.date_filter_var)
+        self.date_filter_entry.pack(side="left", padx=(0,2))
+        ctk.CTkButton(date_row, text=t("apply"), command=self.apply_date_filter, width=60).pack(side="left", padx=(0,0))
+        # Linha: App: | [campo] | [Buscar]
+        app_row = ctk.CTkFrame(filter_frame, fg_color="#232b3b")
+        app_row.pack(anchor="w", pady=2)
+        ctk.CTkLabel(app_row, text="App: ").pack(side="left", padx=(0,2))
+        self.app_filter_var = ctk.StringVar()
+        self.app_filter_entry = ctk.CTkEntry(app_row, width=100, textvariable=self.app_filter_var)
+        self.app_filter_entry.pack(side="left", padx=(0,2))
+        ctk.CTkButton(app_row, text=t("search"), command=self.apply_app_filter, width=60).pack(side="left", padx=(0,0))
+        # --- Frame do Título e Botão Voltar ---
+        # Frame do botão voltar, sem espaço extra
+        title_bar_frame = ctk.CTkFrame(history_frame, fg_color="transparent")
+        title_bar_frame.pack(fill="x", pady=(0, 0), padx=5)
+        back_button = ctk.CTkButton(
+            title_bar_frame,
+            text=f"‹ {t('back')}",
+            width=80,
+            command=self.show_main_page,
+            fg_color="#6B7280",
+            hover_color="#374151"
+        )
+        back_button.pack(side="left", padx=0, pady=0)
+
+        # Filtros movidos para o topo ao lado dos relatórios
+
         # Container principal
         container = ctk.CTkFrame(history_frame, fg_color="#232B3B")
         container.pack(fill="both", expand=True, padx=0, pady=0)
@@ -467,7 +507,40 @@ class TimeTrackerApp:
 
     def get_window_titles(self):
         """Obtém todos os títulos de janela disponíveis"""
-        return ["Choose App"] + [title for title in gw.getAllTitles() if title.strip()]
+        return [t("choose_app")] + [title for title in gw.getAllTitles() if title.strip()]
+
+    def add_app_slot(self):
+        """Adiciona uma nova linha para selecionar um aplicativo."""
+        slot_frame = ctk.CTkFrame(self.app_selector_container, fg_color="transparent")
+        
+        combo = ctk.CTkComboBox(
+            slot_frame,
+            values=self.get_window_titles()
+        )
+        combo.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        combo.set(t('choose_app'))
+        self.app_combos.append(combo)
+
+        remove_btn = ctk.CTkButton(
+            slot_frame,
+            text="-",
+            width=28,
+            height=28,
+            fg_color="#6B7280",
+            hover_color="#C53030",
+            command=lambda f=slot_frame, c=combo: self.remove_app_slot(f, c)
+        )
+        remove_btn.pack(side="left")
+
+        slot_frame.pack(fill="x", expand=True, pady=2, padx=5)
+
+    def remove_app_slot(self, slot_frame, combo_to_remove):
+        """Remove uma linha de seleção de aplicativo."""
+        if len(self.app_combos) > 1:
+            self.app_combos.remove(combo_to_remove)
+            slot_frame.destroy()
+        else:
+            messagebox.showwarning(t("warning"), t("at_least_one_app"))
 
     def start_tracking(self):
         """Inicia o tracking dos aplicativos selecionados"""
@@ -476,24 +549,24 @@ class TimeTrackerApp:
             combo.get() for combo in self.app_combos
             if combo.get() and "Application" not in combo.get() and "Choose App" not in combo.get()
         ]
-        
         if not self.target_windows:
             messagebox.showwarning(t("warning"), t("please_select_app"))
             return
-            
         if not self.running:
             self.running = True
             self.tracking_active = False
             self.last_activity_time = time.time()
             self.start_btn.configure(fg_color="#27AE60", text="▶ Tracking")
             self.update_timer_color()
+            # Novo: zera o tempo individual de cada app
+            self.app_times = {app: 0.0 for app in self.target_windows}
             threading.Thread(target=self.track_time, daemon=True).start()
 
     def stop_tracking(self):
         """Para o tracking e salva a sessão"""
         if self.running:
             self.running = False
-            self.start_btn.configure(fg_color="#3498DB", text="▶ Start")
+            self.start_btn.configure(fg_color="#22D3EE", text=t("start"))
             self.update_timer_color()
             
             if self.elapsed_time > 0:
@@ -516,17 +589,24 @@ class TimeTrackerApp:
             self.check_mouse_activity()
             current_window = self.get_active_window()
             user_active = self.is_user_active()
-            window_active = current_window and any(target in current_window for target in self.target_windows)
-            if user_active and window_active:
+            # Novo: identifica qual app está ativo
+            app_found = None
+            if current_window:
+                for app in self.target_windows:
+                    if app in current_window:
+                        app_found = app
+                        break
+            if user_active and app_found:
                 if not self.tracking_active:
                     self.tracking_active = True
                     self.timer_label.configure(text_color="#1ABC9C")
                     if hasattr(self, 'compact_timer_label'):
                         self.compact_timer_label.configure(text_color="#1ABC9C")
-                    # Ativa o modo compacto automaticamente quando o contador começa a rodar
                     if not hasattr(self, '_compact_mode') or not self._compact_mode:
                         self.root.after(0, self.toggle_compact_mode)
-                self.elapsed_time += (self.check_interval / 60.0)  # Incrementa com base no intervalo
+                # Novo: incrementa só o app ativo
+                self.app_times[app_found] += (self.check_interval / 60.0)
+                self.elapsed_time = sum(self.app_times.values())
                 self.update_timer_display()
             else:
                 if self.tracking_active:
@@ -558,16 +638,16 @@ class TimeTrackerApp:
         now = datetime.now()
         date_str = now.strftime("%d/%m/%Y")
         time_str = now.strftime("%H:%M:%S")
-        apps_str = ", ".join(self.target_windows)
-        duration = self.format_duration(self.elapsed_time)
-        
+        # Novo: salva uma linha por app
         with open(resource_path(self.filename), mode="a", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
-            writer.writerow([date_str, time_str, apps_str, duration])
-        
-        self.add_history_entry(date_str, time_str, apps_str, duration)
+            for app, minutes in self.app_times.items():
+                duration = self.format_duration(minutes)
+                writer.writerow([date_str, time_str, app, duration])
+                self.add_history_entry(date_str, time_str, app, duration)
         self.elapsed_time = 0
         self.update_timer_display()
+        self.app_times = {}
 
     def format_duration(self, elapsed_minutes):
         """Formata a duração para HH:MM:SS"""
@@ -577,8 +657,8 @@ class TimeTrackerApp:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     def load_history(self):
-        """Carrega o histórico do arquivo CSV"""
         self.clear_history_content()
+        self.update_usage_reports(self.app_filter_var.get() if hasattr(self, 'app_filter_var') else None)
         if os.path.exists(resource_path(self.filename)):
             with open(resource_path(self.filename), mode="r", encoding="utf-8") as file:
                 reader = csv.reader(file)
@@ -617,29 +697,109 @@ class TimeTrackerApp:
         except ValueError:
             messagebox.showerror(t("invalid_date"), t("invalid_date_format"))
 
+    def update_usage_reports(self, app_query=None):
+        """Atualiza os relatórios de tempo de uso diário, semanal e mensal para o app filtrado (ou todos)."""
+        import calendar
+        from datetime import timedelta
+        if not os.path.exists(resource_path(self.filename)):
+            for text_lbl, time_lbl in self.usage_report_labels:
+                text_lbl.configure(text="")
+                time_lbl.configure(text="")
+            return
+        now = datetime.now()
+        today = now.date()
+        week_start = today - timedelta(days=today.weekday())
+        month_start = today.replace(day=1)
+        total_day = 0
+        total_week = 0
+        total_month = 0
+        app_query = (app_query or '').strip().lower()
+        with open(resource_path(self.filename), mode="r", encoding="utf-8") as file:
+            reader = csv.reader(file)
+            next(reader)
+            for row in reader:
+                if len(row) < 4:
+                    continue
+                row_date = None
+                try:
+                    row_date = datetime.strptime(row[0], "%d/%m/%Y").date()
+                except Exception:
+                    continue
+                app_name = row[2].lower()
+                if app_query and app_query not in app_name:
+                    continue
+                try:
+                    h, m, s = map(int, str(row[3]).split(':'))
+                    minutes = h*60 + m + s/60
+                except Exception:
+                    minutes = 0
+                if row_date == today:
+                    total_day += minutes
+                if week_start <= row_date <= today:
+                    total_week += minutes
+                if month_start <= row_date <= today:
+                    total_month += minutes
+        def fmt(mins):
+            h = int(mins // 60)
+            m = int(mins % 60)
+            s = int((mins*60) % 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        # Textos dos relatórios
+        report_texts = [
+            "⌚ Usage time today:",
+            "⌛ Usage time week:",
+            "📅 Usage time month:"
+        ]
+        times = [fmt(total_day), fmt(total_week), fmt(total_month)]
+        for i, (text_lbl, time_lbl) in enumerate(self.usage_report_labels):
+            text_lbl.configure(text=report_texts[i], font=("Arial", 10), text_color="#6b7280")
+            time_lbl.configure(text=times[i], font=("Arial", 10, "bold"), text_color="#22D3EE")
+
+    def apply_app_filter(self):
+        """Filtra o histórico pelo nome do app (parcial ou completo) e atualiza relatórios."""
+        app_query = self.app_filter_var.get().strip().lower()
+        self.clear_history_content()
+        self.update_usage_reports(app_query)
+        if not app_query:
+            self.load_history()
+            return
+        if os.path.exists(resource_path(self.filename)):
+            with open(resource_path(self.filename), mode="r", encoding="utf-8") as file:
+                reader = csv.reader(file)
+                next(reader)
+                for row in reader:
+                    if len(row) >= 4 and app_query in row[2].lower():
+                        self.add_history_entry(row[0], row[1], row[2], row[3])
+
     def clear_history_content(self):
         """Limpa o conteúdo do histórico"""
         for widget in self.history_content.winfo_children():
             widget.destroy()
 
     def show_history(self):
-        self.show_main_page()
+        self.page_main.pack_forget()
+        self.page_settings.pack_forget()
+        self.page_stats.pack_forget()
+        self.page_history.pack(fill="both", expand=True)
 
     def show_stats(self):
         self.page_main.pack_forget()
         self.page_settings.pack_forget()
+        self.page_history.pack_forget()
         self.page_stats.pack(fill="both", expand=True)
         self.update_stats_dashboard()
 
     def show_settings_page(self):
         self.page_main.pack_forget()
         self.page_stats.pack_forget()
+        self.page_history.pack_forget()
         self.page_settings.pack(fill="both", expand=True)
 
     def show_main_page(self):
         self.page_settings.pack_forget()
         self.page_stats.pack_forget()
-        self.page_main.pack(fill="both", expand=True, pady=(32, 0))  # <-- Corrija aqui!
+        self.page_history.pack_forget()
+        self.page_main.pack(fill="both", expand=True, pady=(32, 0))
 
     def toggle_always_on_top(self, state):
         """Ativa/desativa o modo Always On Top"""
@@ -658,7 +818,8 @@ class TimeTrackerApp:
         else:
             # Ocultar barra padrão e mostrar barra customizada
             self.root.overrideredirect(True)
-            if hasattr(self, 'title_bar'):
+            if hasattr(self, 'title_bar'): # Garante que title_bar exista antes de tentar posicionar
+                self.root.geometry("425x500") # Retorna à altura inicial fixa
                 self.title_bar.place(x=0, y=0, relwidth=1)
 
     def validate_shortcut(self, shortcut):
@@ -691,27 +852,27 @@ class TimeTrackerApp:
         }
         for key, shortcut in new_shortcuts.items():
             if shortcut and not self.validate_shortcut(shortcut):
-                messagebox.showerror("Invalid Shortcut", f"Invalid format for {key} shortcut. Use format like 'ctrl+alt+e'.")
+                messagebox.showerror(t("invalid_shortcut"), t("invalid_shortcut_format", key=key))
                 return
 
         # Validar idle_threshold
         try:
             idle_threshold = float(self.idle_threshold_var.get())
             if idle_threshold <= 0:
-                raise ValueError("Idle threshold must be positive")
+                raise ValueError(t("invalid_idle_threshold_msg"))
             self.idle_threshold = idle_threshold
         except (ValueError, TypeError):
-            messagebox.showerror("Invalid Idle Threshold", "Please enter a valid positive number for idle threshold.")
+            messagebox.showerror(t("invalid_idle_threshold"), t("invalid_idle_threshold_msg"))
             return
 
         # Validar check_interval
         try:
             check_interval = float(self.check_interval_var.get())
             if check_interval <= 0:
-                raise ValueError("Check interval must be positive")
+                raise ValueError(t("invalid_check_interval_msg"))
             self.check_interval = check_interval
         except (ValueError, ValueError):
-            messagebox.showerror("Invalid Check interval", "Please enter a valid positive number for check interval.")
+            messagebox.showerror(t("invalid_check_interval"), t("invalid_check_interval_msg"))
             return
 
         # Desregistra atalhos antigos
@@ -790,7 +951,7 @@ class TimeTrackerApp:
                 y = self.root.winfo_y() + event.y - self._drag_start_y
                 self.root.geometry(f"+{x}+{y}")
 
-            self.compact_frame.bind("<Button-1>", start_move)
+            self.compact_frame.bind ("<Button-1>", start_move)
             self.compact_frame.bind("<B1-Motion>", do_move)
             self.compact_inner.bind("<Button-1>", start_move)
             self.compact_inner.bind("<B1-Motion>", do_move)
@@ -805,8 +966,8 @@ class TimeTrackerApp:
         else:
             if hasattr(self, 'compact_frame'):
                 self.compact_frame.pack_forget()
-            self.page_main.pack(fill="both", expand=True, pady=(32, 0))  # <-- Corrija aqui!
-            self.root.geometry("425x855")
+            self.page_main.pack(fill="both", expand=True, pady=(32, 0))
+            self.root.geometry("425x500") # Retorna à altura original
             self.nav_frame.pack(side="bottom", fill="x", padx=20, pady=20)
             self.update_timer_color()
 
@@ -842,22 +1003,47 @@ class TimeTrackerApp:
                 self.compact_timer_label.configure(text_color="#EA697B")
 
     def update_stats_dashboard(self):
-        """Cria e exibe o dashboard de estatísticas."""
+        """Cria e exibe o dashboard de estatísticas com barra de rolagem, gráfico de pizza e filtro por app."""
         for widget in self.page_stats.winfo_children():
             widget.destroy()
 
-        ctk.CTkLabel(self.page_stats, text=t("statistics"), font=("Arial", 18, "bold")).pack(pady=(20, 10))
+        # Frame rolável
+        scroll_frame = ctk.CTkScrollableFrame(self.page_stats, fg_color="transparent", label_text="")
+        scroll_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+        # Novo: Frame para título e botão voltar
+        title_stats_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")
+        title_stats_frame.pack(fill="x", pady=(35, 10), padx=0)
+        back_btn = ctk.CTkButton(
+            title_stats_frame,
+            text=f"‹ {t('back')}",
+            width=80,
+            fg_color="#6b7280",
+            hover_color="#374151",
+            text_color="#FFFFFF",
+            font=("Arial", 12, "bold"),
+            command=self.show_main_page
+        )
+        back_btn.pack(side="left", padx=(0, 0), pady=0)
+        # Label "Statistics" alinhado à esquerda, após o botão, com padding
+        ctk.CTkLabel(title_stats_frame, text=t("statistics"), font=("Arial", 18, "bold"), text_color="#22d3ee").pack(side="left", padx=(90,0))
+
+
+        # Variável para filtro múltiplo
+        import tkinter as tk
+        self.stats_app_filter_var = getattr(self, 'stats_app_filter_var', None)
+        self.stats_app_filter_selected = getattr(self, 'stats_app_filter_selected', [])
 
         try:
             if not os.path.exists(resource_path(self.filename)) or os.path.getsize(resource_path(self.filename)) < 20:
-                ctk.CTkLabel(self.page_stats, text=t("no_history")).pack(pady=20)
-                ctk.CTkButton(self.page_stats, text=t("back"), command=self.show_main_page).pack(pady=10)
+                ctk.CTkLabel(scroll_frame, text=t("no_history")).pack(pady=20)
+                ctk.CTkButton(scroll_frame, text=t("back"), command=self.show_main_page).pack(pady=10)
                 return
 
-            df = pd.read_csv(resource_path(self.filename), names=[t("date"), t("time"), t("apps"), t("duration")], header=0, engine='python')
+            df = pd.read_csv(resource_path(self.filename), header=0, engine='python')
             if df.empty:
-                ctk.CTkLabel(self.page_stats, text=t("no_history")).pack(pady=20)
-                ctk.CTkButton(self.page_stats, text=t("back"), command=self.show_main_page).pack(pady=10)
+                ctk.CTkLabel(scroll_frame, text=t("no_history")).pack(pady=20)
+                ctk.CTkButton(scroll_frame, text=t("back"), command=self.show_main_page).pack(pady=10)
                 return
 
             def duration_to_minutes(duration_str):
@@ -868,54 +1054,115 @@ class TimeTrackerApp:
                     return 0
 
             df['MINUTES'] = df['DURATION'].apply(duration_to_minutes)
-            app_usage = df.groupby('APPS')['MINUTES'].sum().sort_values(ascending=True)
-            
-            # Média diária
             df['DATE'] = pd.to_datetime(df['DATE'], format='%d/%m/%Y')
+
+
+            # Listbox de filtro múltiplo de apps
+            app_list = sorted(df['APP'].unique())
+
+            # Frame com borda arredondada para filtro e Listbox
+            filter_frame = ctk.CTkFrame(scroll_frame, corner_radius=5, fg_color="#323b4c")
+            filter_frame.pack(fill="x", padx=20, pady=(0, 10), anchor="w")
+
+            # Label acima do Listbox
+            ctk.CTkLabel(filter_frame, text=t("total_time_by_app"), font=("Arial", 12, "bold"), text_color="white", fg_color="transparent").pack(side="top", anchor="w", padx=(5, 0), pady=(5, 0))
+
+            # Listbox nativo do tkinter para múltipla seleção, com customização de cores
+            listbox_frame = tk.Frame(filter_frame, bg="#323b4c")
+            listbox_frame.pack(side="top", anchor="w", pady=(5, 5), padx=(5, 0))
+            # Calcula largura dinâmica para Listbox (aproximação)
+            listbox_width = max(28, min(60, int(self.page_stats.winfo_width() / 8)))
+            app_listbox = tk.Listbox(
+                listbox_frame,
+                selectmode="multiple",
+                exportselection=False,
+                height=min(8, len(app_list)),
+                width=listbox_width,
+                bg="#323b4c",
+                fg="white",
+                selectbackground="#444b5a",
+                selectforeground="white",
+                highlightthickness=0,
+                relief="flat",
+                borderwidth=0,
+                font=("Arial", 11)
+            )
+            for idx, app in enumerate(app_list):
+                app_listbox.insert(tk.END, app)
+                # Seleciona apps previamente filtrados
+                if app in self.stats_app_filter_selected:
+                    app_listbox.selection_set(idx)
+            app_listbox.pack(side="left", fill="x", expand=True)
+
+            def apply_multi_app_filter():
+                self.stats_app_filter_selected = [app_list[int(i)] for i in app_listbox.curselection()]
+                self.update_stats_dashboard()
+
+            apply_btn = ctk.CTkButton(filter_frame, text=t("apply"), width=60, command=apply_multi_app_filter)
+            apply_btn.pack(side="left", padx=(10,0))
+
+            # Filtrar DataFrame se apps selecionados
+            selected_apps = self.stats_app_filter_selected
+            if selected_apps:
+                df = df[df['APP'].isin(selected_apps)]
+
+            app_usage = df.groupby('APP')['MINUTES'].sum().sort_values(ascending=True)
             daily_avg = df.groupby(df['DATE'].dt.date)['MINUTES'].sum().mean()
-            
-            # Tempo total por aplicativo
             total_time = app_usage.to_dict()
 
             # Exibir estatísticas textuais
-            stats_frame = ctk.CTkFrame(self.page_stats)
+            stats_frame = ctk.CTkFrame(scroll_frame)
             stats_frame.pack(fill="x", padx=20, pady=10)
-            ctk.CTkLabel(stats_frame, text=t("daily_average", minutes=daily_avg), font=("Arial", 12)).pack(anchor="w", pady=5)
-            ctk.CTkLabel(stats_frame, text=t("total_time_by_app"), font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
+            # Formatar média diária para HH:MM:SS
+            if pd.notnull(daily_avg):
+                total_seconds = int(daily_avg * 60)
+                h = total_seconds // 3600
+                m = (total_seconds % 3600) // 60
+                s = total_seconds % 60
+                daily_avg_str = f"{h:02d}:{m:02d}:{s:02d}"
+            else:
+                daily_avg_str = "00:00:00"
+            ctk.CTkLabel(stats_frame, text=t("daily_average", minutes=daily_avg_str), font=("Arial", 12)).pack(anchor="w", pady=5)
+            # Lista de apps e tempos
             for app, minutes in total_time.items():
                 ctk.CTkLabel(stats_frame, text=f"{app}: {minutes:.1f} minutes", font=("Arial", 12)).pack(anchor="w", padx=20)
 
-            plt.style.use('dark_background')
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), dpi=100, facecolor='#2b2b2b')
-            
-            # Bar Chart
-            app_usage.plot(kind='barh', ax=ax1, color='#1ABC9C')
-            ax1.set_title(t("total_time_per_app"), color='white')
-            ax1.set_xlabel('Total Minutes', color='white')
-            ax1.set_ylabel('')
-            ax1.tick_params(colors='white')
-            ax1.set_facecolor('#3a3a3a')
 
-            # Line Chart
-            for app in df['APPS'].unique():
-                app_data = df[df['APPS'] == app]['MINUTES']
+            plt.style.use('dark_background')
+            plt.rcParams.update({'font.size': 11})
+            # Pie chart em primeiro, depois Line chart
+            fig, axs = plt.subplots(2, 1, figsize=(10, 8), dpi=100, facecolor='#232b3b', gridspec_kw={'height_ratios': [1, 1]})
+            ax1, ax2 = axs
+
+            # Pie Chart (primeiro)
+            if len(app_usage) > 0 and app_usage.sum() > 0:
+                colors = plt.cm.Set3.colors if len(app_usage) <= 12 else None
+                ax1.pie(app_usage, labels=app_usage.index, autopct='%1.1f%%', startangle=140, colors=colors, textprops={'color': 'white', 'fontsize': 11})
+                ax1.set_title(t("pie_chart_title") if 'pie_chart_title' in TRANSLATIONS.get(TimeTrackerApp.current_language, {}) else "Usage Distribution (Pie)", color='white', fontsize=11)
+                ax1.set_facecolor('#232b3b')
+            else:
+                ax1.axis('off')
+
+            # Line Chart (segundo)
+            for app in df['APP'].unique():
+                app_data = df[df['APP'] == app]['MINUTES']
                 ax2.plot(app_data.index, app_data.values, label=app)
-            ax2.set_title(t("app_usage_over_time"), color='white')
-            ax2.set_xlabel('Date', color='white')
-            ax2.set_ylabel('Minutes', color='white')
-            ax2.tick_params(colors='white', rotation=45)
-            ax2.legend(loc='upper left', facecolor='#3a3a3a', edgecolor='white', labelcolor='white')
-            ax2.set_facecolor('#3a3a3a')
+            ax2.set_title(t("app_usage_over_time"), color='white', fontsize=11)
+            ax2.set_xlabel('Date', color='white', fontsize=11)
+            ax2.set_ylabel('Minutes', color='white', fontsize=11)
+            ax2.tick_params(colors='white', labelsize=11, rotation=45)
+            ax2.legend(loc='upper left', facecolor='#232b3b', edgecolor='white', labelcolor='white', fontsize=11)
+            ax2.set_facecolor('#232b3b')
 
             fig.tight_layout(pad=2.0)
-            canvas = FigureCanvasTkAgg(fig, master=self.page_stats)
+            canvas = FigureCanvasTkAgg(fig, master=scroll_frame)
             canvas.draw()
             canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
 
         except Exception as e:
-            ctk.CTkLabel(self.page_stats, text=f"{t('error')} {e}").pack(pady=20)
+            ctk.CTkLabel(scroll_frame, text=f"{t('error')} {e}").pack(pady=20)
 
-        ctk.CTkButton(self.page_stats, text=t("back"), command=self.show_main_page).pack(pady=10)
+        # Botão back removido do final da página (agora está no topo ao lado do título)
 
     def setup_tray_thread(self):
         if not hasattr(self, 'tray_thread') or not self.tray_thread.is_alive():
@@ -1028,8 +1275,10 @@ class TimeTrackerApp:
             visible_page = 'settings'
         elif hasattr(self, 'page_stats') and self.page_stats.winfo_ismapped():
             visible_page = 'stats'
+        elif hasattr(self, 'page_history') and self.page_history.winfo_ismapped():
+            visible_page = 'history'
         # Destroi todos os frames principais
-        for attr in ['page_main', 'page_settings', 'page_stats', 'nav_frame']:
+        for attr in ['page_main', 'page_settings', 'page_stats', 'page_history', 'nav_frame']:
             if hasattr(self, attr):
                 try:
                     getattr(self, attr).destroy()
@@ -1043,6 +1292,8 @@ class TimeTrackerApp:
             self.show_settings_page()
         elif visible_page == 'stats':
             self.show_stats()
+        elif visible_page == 'history':
+            self.show_history()
 
 if __name__ == "__main__":
     root = ctk.CTk()
