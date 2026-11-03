@@ -11,7 +11,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'matplotlib', 'pandas', 'numpy', 'scipy', 'IPython',
+        'keyboard', 'matplotlib', 'pandas', 'numpy', 'scipy', 'IPython',
         'pyautogui', 'pyscreeze', 'mouseinfo', 'pymsgbox', 'pytweening'
     ],
     noarchive=False,

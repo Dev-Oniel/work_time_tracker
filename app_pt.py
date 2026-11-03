@@ -9,7 +9,6 @@ import json
 import ctypes
 from datetime import datetime, timedelta
 import pygetwindow as gw
-import keyboard
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
@@ -26,6 +25,73 @@ warnings.filterwarnings('ignore', message='.*missing from font.*')
 # === Estrutura Nativa do Windows para Detecção de Inatividade ===
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+# === Atalhos Globais Nativos do Windows (sem dependência do módulo 'keyboard' que causa falso positivo) ===
+class NativeHotkeys:
+    def __init__(self, root=None):
+        self.root = root
+        self.hotkeys = {}
+        self.running = False
+        self.thread = None
+        self._next_id = 1
+
+    def _parse_keys(self, shortcut_str):
+        parts = [p.strip().lower() for p in shortcut_str.split('+')]
+        mod = 0x4000  # MOD_NOREPEAT
+        vk = 0
+        for p in parts:
+            if p in ('ctrl', 'control'):
+                mod |= 0x0002
+            elif p == 'alt':
+                mod |= 0x0001
+            elif p == 'shift':
+                mod |= 0x0004
+            elif len(p) == 1:
+                vk = ord(p.upper())
+            elif p.startswith('f') and p[1:].isdigit():
+                vk = 0x70 + int(p[1:]) - 1
+        return mod, vk
+
+    def register(self, shortcut_str, callback):
+        mod, vk = self._parse_keys(shortcut_str)
+        if vk:
+            hid = self._next_id
+            self._next_id += 1
+            self.hotkeys[hid] = (shortcut_str, mod, vk, callback)
+            return hid
+        return None
+
+    def start(self):
+        if self.running:
+            self.stop()
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        registered_ids = []
+        for hid, (s, mod, vk, cb) in list(self.hotkeys.items()):
+            if ctypes.windll.user32.RegisterHotKey(None, hid, mod, vk):
+                registered_ids.append(hid)
+        from ctypes import wintypes
+        msg = wintypes.MSG()
+        while self.running:
+            if ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), None, 0x0312, 0x0312, 1):
+                hid = msg.wParam
+                if hid in self.hotkeys:
+                    cb = self.hotkeys[hid][3]
+                    if self.root:
+                        self.root.after(0, cb)
+                    else:
+                        cb()
+            time.sleep(0.05)
+        for hid in registered_ids:
+            ctypes.windll.user32.UnregisterHotKey(None, hid)
+
+    def stop(self):
+        self.running = False
+        self.hotkeys.clear()
+        self._next_id = 1
 
 def get_idle_seconds():
     """Retorna o tempo de inatividade do usuário em segundos usando a API nativa do Windows (GetLastInputInfo)."""
@@ -176,6 +242,7 @@ class TimeTrackerApp:
 
         # Arquivo de configurações e atalhos
         self.settings_file = resource_path("settings.json")
+        self.native_hotkeys = NativeHotkeys(root=self.root)
         self.shortcuts = {
             "start": "ctrl+alt+e",
             "stop": "ctrl+alt+d",
@@ -881,11 +948,8 @@ class TimeTrackerApp:
             messagebox.showerror("Intervalo de Verificação Inválido", "Digite um número positivo válido para o intervalo de verificação.")
             return
 
-        for shortcut in self.shortcuts.values():
-            try:
-                keyboard.remove_hotkey(shortcut)
-            except Exception:
-                pass
+        if hasattr(self, "native_hotkeys"):
+            self.native_hotkeys.stop()
 
         self.shortcuts = new_shortcuts
         self.register_shortcuts()
@@ -908,19 +972,21 @@ class TimeTrackerApp:
 
     def register_shortcuts(self):
         try:
-            for key, shortcut in self.shortcuts.items():
-                if shortcut:
-                    if key == "start":
-                        keyboard.add_hotkey(shortcut, self.start_tracking)
-                    elif key == "stop":
-                        keyboard.add_hotkey(shortcut, self.stop_tracking)
-                    elif key == "reset":
-                        keyboard.add_hotkey(shortcut, self.reset_timer)
-                    elif key == "compact":
-                        keyboard.add_hotkey(shortcut, self.toggle_compact_mode)
+            if hasattr(self, 'native_hotkeys'):
+                self.native_hotkeys.stop()
+                for key, shortcut in self.shortcuts.items():
+                    if shortcut:
+                        if key == "start":
+                            self.native_hotkeys.register(shortcut, self.start_tracking)
+                        elif key == "stop":
+                            self.native_hotkeys.register(shortcut, self.stop_tracking)
+                        elif key == "reset":
+                            self.native_hotkeys.register(shortcut, self.reset_timer)
+                        elif key == "compact":
+                            self.native_hotkeys.register(shortcut, self.toggle_compact_mode)
+                self.native_hotkeys.start()
         except Exception as e:
-            messagebox.showerror("Atalho Inválido", f"Não foi possível registrar o atalho: {e}")
-
+            print(f"Erro ao registrar atalhos nativos: {e}")
     def toggle_compact_mode(self):
         if not hasattr(self, '_compact_mode'):
             self._compact_mode = False
@@ -1179,6 +1245,8 @@ class TimeTrackerApp:
         self.stop_tracking_event.set()
         if hasattr(self, 'tray_icon'):
             self.tray_icon.stop()
+        if hasattr(self, "native_hotkeys"):
+            self.native_hotkeys.stop()
         self.running = False
         self.root.quit()
 

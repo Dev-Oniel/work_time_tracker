@@ -1,5 +1,4 @@
 customtkinter
 pygetwindow
-keyboard
 pystray
 pillow
