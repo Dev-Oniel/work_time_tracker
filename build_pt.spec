@@ -1,10 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 
 a = Analysis(
     ['app_pt.py'],
     pathex=[],
     binaries=[],
-    datas=[('icone.ico', '.')],
+    datas=[('icone.ico', '.')] + collect_data_files('customtkinter'),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
