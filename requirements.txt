@@ -1,0 +1,8 @@
+customtkinter
+pygetwindow
+keyboard
+pystray
+pillow
+pandas
+matplotlib
+psutil

@@ -5,9 +5,9 @@ import threading
 import csv
 import os
 import json
+import ctypes
 from datetime import datetime
 import pygetwindow as gw
-import pyautogui
 import keyboard
 import pystray
 from PIL import Image, ImageDraw, ImageFont
@@ -15,12 +15,32 @@ import pandas as pd
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 import sys
+import re
+import warnings
+
+# Suprime avisos do Matplotlib sobre glifos/emojis ausentes
+warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
+warnings.filterwarnings('ignore', message='.*missing from font.*')
+
+# === Estrutura Nativa do Windows para Detecção de Inatividade ===
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+def get_idle_seconds():
+    """Retorna o tempo de inatividade do usuário em segundos usando a API nativa do Windows (GetLastInputInfo)."""
+    lii = LASTINPUTINFO()
+    lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+    if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+        millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+        return max(0.0, millis / 1000.0)
+    return 0.0
 
 def resource_path(relative_path):
     """Retorna o caminho absoluto para recursos, compatível com PyInstaller."""
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, relative_path)
 
 # === Tradução ===
 TRANSLATIONS = {}
@@ -76,13 +96,18 @@ class TimeTrackerApp:
         self.last_activity_time = time.time()
         self.idle_threshold = 10  # Agora configurável
         self.check_interval = 1.0  # Intervalo de verificação configurável (em segundos)
-        self.mouse_position = pyautogui.position()
         self.timer_var = ctk.StringVar(value="00:00:00")
+        self.stop_tracking_event = threading.Event()
+        self.tray_stop_event = threading.Event()
+        try:
+            self.tray_font = ImageFont.truetype("arial.ttf", 24)
+        except Exception:
+            self.tray_font = ImageFont.load_default()
         self.show_full_history = False  # Controla exibição do histórico completo
         self.app_times = {}  # Novo: tempo individual de cada app
         
         # Arquivo de configurações e atalhos
-        self.settings_file = "settings.json"
+        self.settings_file = resource_path("settings.json")
         self.shortcuts = {
             "start": "ctrl+alt+e",
             "stop": "ctrl+alt+d",
@@ -99,7 +124,7 @@ class TimeTrackerApp:
         self.auto_compact_mode_var = ctk.BooleanVar(value=True) # Novo: Padrão para ativar automaticamente
 
         # Arquivo CSV
-        self.filename = "time_history.csv"
+        self.filename = resource_path("time_history.csv")
         self.initialize_csv()
         
         self.load_settings()
@@ -108,7 +133,7 @@ class TimeTrackerApp:
         self.register_shortcuts()
 
         # Configurar monitoramento de teclado
-        keyboard.hook(self.keyboard_activity)
+        # Inatividade agora monitorada via Windows API nativa
 
         # Configurar bandeja do sistema
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_to_tray)
@@ -160,27 +185,29 @@ class TimeTrackerApp:
         icon_label.bind("<Button-1>", start_move)
         icon_label.bind("<B1-Motion>", do_move)
 
-    def keyboard_activity(self, event):
-        """Registra atividade do teclado"""
-        self.last_activity_time = time.time()
-
-    def check_mouse_activity(self):
-        """Verifica se o mouse se moveu"""
-        current_position = pyautogui.position()
-        if current_position != self.mouse_position:
-            self.mouse_position = current_position
-            self.last_activity_time = time.time()
-        return self.last_activity_time
-
     def is_user_active(self):
-        """Verifica se o usuário está ativo"""
-        return (time.time() - self.last_activity_time) < self.idle_threshold
+        """Verifica se o usuário está ativo via API nativa do Windows."""
+        return get_idle_seconds() < self.idle_threshold
 
     def initialize_csv(self):
-        if not os.path.exists(resource_path(self.filename)):
-            with open(resource_path(self.filename), mode="w", newline="", encoding="utf-8") as file:
+        csv_path = resource_path(self.filename)
+        expected_header = ["DATE", "TIME", "APP", "DURATION"]
+        if not os.path.exists(csv_path):
+            with open(csv_path, mode="w", newline="", encoding="utf-8") as file:
                 writer = csv.writer(file)
-                writer.writerow(["DATE", "TIME", "APP", "DURATION"])
+                writer.writerow(expected_header)
+        else:
+            try:
+                with open(csv_path, mode="r", encoding="utf-8", errors="replace") as file:
+                    lines = file.readlines()
+                if lines:
+                    header = [h.strip() for h in lines[0].strip().split(",")]
+                    if "DURATION" not in header:
+                        lines[0] = ",".join(expected_header) + "\n"
+                        with open(csv_path, mode="w", newline="", encoding="utf-8") as file:
+                            file.writelines(lines)
+            except Exception as e:
+                print(f"Error checking/repairing CSV header: {e}")
 
     def load_settings(self):
         """Carrega configurações de um arquivo JSON."""
@@ -556,6 +583,7 @@ class TimeTrackerApp:
             self.running = True
             self.tracking_active = False
             self.last_activity_time = time.time()
+            self.stop_tracking_event.clear()
             self.start_btn.configure(fg_color="#27AE60", text="▶ Tracking")
             self.update_timer_color()
             # Novo: zera o tempo individual de cada app
@@ -566,12 +594,13 @@ class TimeTrackerApp:
         """Para o tracking e salva a sessão"""
         if self.running:
             self.running = False
+            self.tracking_active = False
+            self.stop_tracking_event.set()
             self.start_btn.configure(fg_color="#22D3EE", text=t("start"))
             self.update_timer_color()
             
             if self.elapsed_time > 0:
                 self.save_session()
-            self.tracking_active = False
             self.elapsed_time = 0
             self.update_timer_display()
 
@@ -585,11 +614,9 @@ class TimeTrackerApp:
 
     def track_time(self):
         """Thread principal que monitora o tempo"""
-        while self.running:
-            self.check_mouse_activity()
+        while self.running and not self.stop_tracking_event.is_set():
             current_window = self.get_active_window()
             user_active = self.is_user_active()
-            # Novo: identifica qual app está ativo
             app_found = None
             if current_window:
                 for app in self.target_windows:
@@ -599,22 +626,18 @@ class TimeTrackerApp:
             if user_active and app_found:
                 if not self.tracking_active:
                     self.tracking_active = True
-                    self.timer_label.configure(text_color="#1ABC9C")
-                    if hasattr(self, 'compact_timer_label'):
-                        self.compact_timer_label.configure(text_color="#1ABC9C")
-                    if not hasattr(self, '_compact_mode') or not self._compact_mode:
+                    self.root.after(0, self.update_timer_color)
+                    if hasattr(self, 'auto_compact_mode_var') and self.auto_compact_mode_var.get() and (not hasattr(self, '_compact_mode') or not self._compact_mode):
                         self.root.after(0, self.toggle_compact_mode)
-                # Novo: incrementa só o app ativo
                 self.app_times[app_found] += (self.check_interval / 60.0)
                 self.elapsed_time = sum(self.app_times.values())
-                self.update_timer_display()
+                self.root.after(0, self.update_timer_display)
             else:
                 if self.tracking_active:
                     self.tracking_active = False
-                    self.timer_label.configure(text_color="#EA697B")
-                    if hasattr(self, 'compact_timer_label'):
-                        self.compact_timer_label.configure(text_color="#EA697B")
-            time.sleep(self.check_interval)  # Dorme conforme intervalo configurado
+                    self.root.after(0, self.update_timer_color)
+            if self.stop_tracking_event.wait(self.check_interval):
+                break
 
     def get_active_window(self):
         """Obtém a janela ativa atual"""
@@ -931,7 +954,7 @@ class TimeTrackerApp:
                 self.compact_inner.pack(expand=True)
                 self.compact_timer_label = ctk.CTkLabel(
                     self.compact_inner, textvariable=self.timer_var,
-                    font=("Arial", 28, "bold"), text_color="#1ABC9C"
+                    font=("Arial", 28, "bold"), text_color="#EA697B"
                 )
                 self.compact_timer_label.pack(side="left", padx=(5, 2))
                 self.compact_btn_compact = ctk.CTkButton(
@@ -991,16 +1014,12 @@ class TimeTrackerApp:
         self.compact_btn_compact.bind("<B1-Motion>", do_move)
 
     def update_timer_color(self):
-        if self.running:
-            self.timer_label.configure(text_color="#1ABC9C")
-        else:
-            self.timer_label.configure(text_color="#EA697B")
-        
+        is_active = self.running and getattr(self, 'tracking_active', False)
+        color = "#1ABC9C" if is_active else "#EA697B"
+        if hasattr(self, 'timer_label'):
+            self.timer_label.configure(text_color=color)
         if hasattr(self, 'compact_timer_label'):
-            if self.running:
-                self.compact_timer_label.configure(text_color="#1ABC9C")
-            else:
-                self.compact_timer_label.configure(text_color="#EA697B")
+            self.compact_timer_label.configure(text_color=color)
 
     def update_stats_dashboard(self):
         """Cria e exibe o dashboard de estatísticas com barra de rolagem, gráfico de pizza e filtro por app."""
@@ -1046,12 +1065,25 @@ class TimeTrackerApp:
                 ctk.CTkButton(scroll_frame, text=t("back"), command=self.show_main_page).pack(pady=10)
                 return
 
+            if 'DURATION' not in df.columns:
+                if len(df.columns) == 3:
+                    df = df.reset_index()
+                df.columns = ['DATE', 'TIME', 'APP', 'DURATION'][:len(df.columns)]
+
             def duration_to_minutes(duration_str):
                 try:
                     h, m, s = map(int, str(duration_str).split(':'))
                     return (h * 60) + m + (s / 60)
                 except (ValueError, AttributeError):
                     return 0
+
+            def sanitize_label(text, max_len=32):
+                cleaned = re.sub(r'[𐀀-􏿿☀-➿︀-️]', '', str(text)).strip()
+                if not cleaned:
+                    cleaned = str(text).encode('ascii', 'ignore').decode('ascii').strip() or 'App'
+                if len(cleaned) > max_len:
+                    return cleaned[:max_len-3] + '...'
+                return cleaned
 
             df['MINUTES'] = df['DURATION'].apply(duration_to_minutes)
             df['DATE'] = pd.to_datetime(df['DATE'], format='%d/%m/%Y')
@@ -1129,7 +1161,7 @@ class TimeTrackerApp:
 
 
             plt.style.use('dark_background')
-            plt.rcParams.update({'font.size': 11})
+            plt.rcParams.update({'font.size': 11, 'font.sans-serif': ['Segoe UI', 'DejaVu Sans', 'Arial']})
             # Pie chart em primeiro, depois Line chart
             fig, axs = plt.subplots(2, 1, figsize=(10, 8), dpi=100, facecolor='#232b3b', gridspec_kw={'height_ratios': [1, 1]})
             ax1, ax2 = axs
@@ -1137,7 +1169,8 @@ class TimeTrackerApp:
             # Pie Chart (primeiro)
             if len(app_usage) > 0 and app_usage.sum() > 0:
                 colors = plt.cm.Set3.colors if len(app_usage) <= 12 else None
-                ax1.pie(app_usage, labels=app_usage.index, autopct='%1.1f%%', startangle=140, colors=colors, textprops={'color': 'white', 'fontsize': 11})
+                pie_labels = [sanitize_label(a) for a in app_usage.index]
+                ax1.pie(app_usage, labels=pie_labels, autopct='%1.1f%%', startangle=140, colors=colors, textprops={'color': 'white', 'fontsize': 11})
                 ax1.set_title(t("pie_chart_title") if 'pie_chart_title' in TRANSLATIONS.get(TimeTrackerApp.current_language, {}) else "Usage Distribution (Pie)", color='white', fontsize=11)
                 ax1.set_facecolor('#232b3b')
             else:
@@ -1146,7 +1179,7 @@ class TimeTrackerApp:
             # Line Chart (segundo)
             for app in df['APP'].unique():
                 app_data = df[df['APP'] == app]['MINUTES']
-                ax2.plot(app_data.index, app_data.values, label=app)
+                ax2.plot(app_data.index, app_data.values, label=sanitize_label(app))
             ax2.set_title(t("app_usage_over_time"), color='white', fontsize=11)
             ax2.set_xlabel('Date', color='white', fontsize=11)
             ax2.set_ylabel('Minutes', color='white', fontsize=11)
@@ -1181,7 +1214,7 @@ class TimeTrackerApp:
         self.tray_icon.run()
 
     def _update_tray_icon_periodically(self):
-        while self.tray_icon_update_running:
+        while self.tray_icon_update_running and not self.tray_stop_event.is_set():
             if hasattr(self, 'tray_icon') and self.tray_icon.visible:
                 new_image = self._generate_timer_icon_image()
                 full_timer_str = self.timer_var.get()
@@ -1191,11 +1224,14 @@ class TimeTrackerApp:
                     self.tray_icon.title = tooltip_text
                 except Exception as e:
                     print(f"Error updating timer icon: {e}")
-            time.sleep(1)
+            if self.tray_stop_event.wait(1.0):
+                break
 
     def restore_from_tray(self, icon=None, item=None):
         self.tray_icon_update_running = False
-        self.tray_icon.stop()
+        self.tray_stop_event.set()
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.stop()
         self.root.after(0, self.root.deiconify)
         self.root.after(100, lambda: self.root.attributes('-topmost', self.always_on_top))
 
@@ -1205,7 +1241,9 @@ class TimeTrackerApp:
 
     def on_close(self, icon=None, item=None):
         self.tray_icon_update_running = False
-        self.tray_icon.stop()
+        self.tray_stop_event.set()
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.stop()
         self.running = False
         self.root.quit()
 
@@ -1217,7 +1255,7 @@ class TimeTrackerApp:
 
     def _generate_timer_icon_image(self):
         timer_str = self.timer_var.get()
-        is_running = self.running
+        is_active = self.running and getattr(self, 'tracking_active', False)
         parts = timer_str.split(':')
         hours = int(parts[0])
         minutes = int(parts[1])
@@ -1227,14 +1265,10 @@ class TimeTrackerApp:
         else:
             display_text = f"{minutes:02d}:{seconds:02d}"
         img_size = (64, 64)
-        text_color = '#1ABC9C' if is_running else '#EA697B'
+        text_color = '#1ABC9C' if is_active else '#EA697B'
         image = Image.new('RGBA', img_size, (0, 0, 0, 0))
         d = ImageDraw.Draw(image)
-        try:
-            font_size = 24
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except IOError:
-            font = ImageFont.load_default()
+        font = getattr(self, 'tray_font', None) or ImageFont.load_default()
         left, top, right, bottom = d.textbbox((0, 0), display_text, font=font)
         x_draw = (img_size[0] - (right - left)) / 2
         y_draw = (img_size[1] - (bottom - top)) / 2
